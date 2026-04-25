@@ -69,22 +69,46 @@ Non-blocking items surfaced during development. Each entry should have enough co
 
 ---
 
-### [BL-1] Fix hardcoded-date test failures in `tests/coiled_spring_scanner.test.js`
+### [BL-1] Move pine-check tests out of `test:unit` to `test:e2e`
 
-**Surfaced:** 2026-04-24, during Phase A of Coiled Spring Live Feed (feature/coiled-spring-live-feed).
+**Status:** PARTIAL — earnings half RESOLVED on 2026-04-25 (commit `fb22313`). See critical-fix entry below.
 
-**What's broken:** Three pre-existing failures observed in `npm run test:unit`:
+**Original surfaced:** 2026-04-24. Original scope was 3 failures:
 
-- `scoreCatalystAwareness — awards 4 pts for earnings 30-45 days out` — fixture has a hardcoded `earningsTimestamp` that has drifted into the past; `earningsDaysOut` now evaluates to `-20547` instead of the intended 30-45 days out
-- Two `CLI — pine check` tests — require a live TradingView CDP connection; they belong in `test:e2e`, not `test:unit`
+1. ~~`scoreCatalystAwareness — awards 4 pts for earnings 30-45 days out`~~ **WAS A CRITICAL PRODUCTION BUG masquerading as a "drifted fixture."** The Yahoo `earningsTimestamp` unit-mismatch (epoch SECONDS vs JS MILLISECONDS) caused EVERY ticker's `earningsDaysOut` to evaluate to ≈ -20548, silently masking every real earnings catalyst across all fire events. The "drifted fixture" reading from the original audit was wrong; the test was the only thing flagging the bug. Fixed in commit `fb22313` (2026-04-25).
+2. Two `CLI — pine check` tests — STILL OPEN. Require a live TradingView CDP connection; belong in `test:e2e`, not `test:unit`.
 
-**Why not fix now:** Outside the Coiled Spring Live Feed scope. Fixing would touch unrelated scanner test fixtures and the test script split. Safe to address once the live-feed branch merges.
+**Remaining scope:**
+- Move the two pine-check tests out of `test:unit` into `test:e2e` (`package.json` scripts), since they depend on `tv_health_check` returning `cdp_connected: true`.
 
-**Suggested scope when picked up:**
-1. Replace hardcoded `earningsTimestamp` in `tests/coiled_spring_scanner.test.js` with a date computed at test time (`new Date(Date.now() + 35 * 86400_000)`).
-2. Move the two pine-check tests out of `test:unit` into `test:e2e` (`package.json` scripts), since they depend on `tv_health_check` returning `cdp_connected: true`.
-3. Re-run `npm run test:unit` and confirm all green.
+**Estimated effort:** <10 minutes.
 
-**Estimated effort:** <30 minutes.
+---
+
+### [CRITICAL-FIX-2026-04-25] Yahoo earningsTimestamp unit-mismatch — RESOLVED
+
+**Discovered:** 2026-04-25 by user spot-check on LIN ("LIN has an earnings catalyst, why didn't we flag it?").
+
+**Bug:** `scripts/scanner/scoring_v2.js:863` computed `earningsDaysOut` as `(d.earningsTimestamp - Date.now()) / 86_400_000`. Yahoo's `/v7/finance/quote` API returns `earningsTimestamp` in epoch SECONDS; `Date.now()` returns MILLISECONDS. The subtraction yielded ≈ `-Date.now()/86_400_000` ≈ -20548 days for every ticker.
+
+**Impact (CRITICAL):**
+- Every fire event ever emitted carried `earningsDaysOut: -20548`
+- The risk_flags evaluator mapped negative values to yellow "earnings unverified" — silently masking every real earnings catalyst
+- LIN (reports May 1, 6 days out) and ~10 other top-15 tickers with imminent earnings had NO earnings risk flag pre-fix; post-fix, 11 of 15 correctly show yellow (3-7 days)
+
+**Fix:** Heuristic detect-and-convert in `scoreCatalystAwareness`:
+```js
+const tsMs = d.earningsTimestamp < 1e11 ? d.earningsTimestamp * 1000 : d.earningsTimestamp;
+earningsDaysOut = Math.round((tsMs - Date.now()) / 86_400_000);
+```
+Backward-compatible: existing test fixtures pass milliseconds (≥ 1e11) and continue to work; real Yahoo data passes seconds (< 1e11) and is now correctly scaled.
+
+**Regression tests added:** 2 new tests in `tests/coiled_spring_scanner.test.js` pin the unit handling for both seconds (Yahoo format) and milliseconds (legacy fixture format).
+
+**Verification:** Re-ran scanner; LIN now shows `earningsDaysOut: 6` matching the 2026-05-01 release date confirmed via Linde IR press release.
+
+**Lesson learned:** When a test fails with an out-of-range value that "looks like a stale fixture date," verify whether the production code has a unit-mismatch bug before dismissing the test. The `-20548` was a clear sentinel of a unit error, not a year-2026 drift artifact.
+
+---
 
 ---
