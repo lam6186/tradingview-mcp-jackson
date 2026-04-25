@@ -477,6 +477,32 @@ describe('scoreCatalystAwareness', () => {
     assert.equal(confidence, 'medium');
   });
 
+  it('accepts Yahoo-format earningsTimestamp in epoch SECONDS (regression: bug masked all earnings)', () => {
+    // Yahoo's /v7/finance/quote returns earningsTimestamp in epoch SECONDS, not ms.
+    // Pre-fix, the scanner did `(seconds - Date.now()) / 86_400_000` and got
+    // ≈ -20548 for every ticker, which the risk-flags layer mapped to "yellow,
+    // unverified" — silently masking every real earnings catalyst.
+    // This test pins the unit handling so the regression cannot recur.
+    const fiveDaysFromNowSeconds = Math.floor((Date.now() + 5 * 86_400_000) / 1000);
+    const { earningsDaysOut, score } = scoreCatalystAwareness({
+      ...VALID_COIL,
+      earningsTimestamp: fiveDaysFromNowSeconds,
+    });
+    assert.ok(earningsDaysOut >= 4 && earningsDaysOut <= 6, `expected ~5d out from seconds input, got ${earningsDaysOut}`);
+    assert.ok(score >= 2, `expected at least 2 pts for close earnings (got ${score})`);
+  });
+
+  it('also accepts millisecond timestamps for backward compatibility with existing fixtures', () => {
+    // Fixtures pre-dating the unit-mismatch fix passed earningsTimestamp in ms.
+    // The scanner heuristic detects values >= 1e11 as ms and uses them directly.
+    const fiveDaysFromNowMs = Date.now() + 5 * 86_400_000;
+    const { earningsDaysOut } = scoreCatalystAwareness({
+      ...VALID_COIL,
+      earningsTimestamp: fiveDaysFromNowMs,
+    });
+    assert.ok(earningsDaysOut >= 4 && earningsDaysOut <= 6, `expected ~5d out from ms input, got ${earningsDaysOut}`);
+  });
+
   it('detects upgrade keywords in news via matchCatalystKeywords', () => {
     const { score: withUpgrade } = scoreCatalystAwareness(VALID_COIL);
     const { score: withoutUpgrade } = scoreCatalystAwareness({ ...VALID_COIL, news: [] });

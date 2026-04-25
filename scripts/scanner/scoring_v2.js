@@ -858,9 +858,17 @@ export function scoreCatalystAwareness(d, context = {}) {
   let confidence = 'high';
 
   // 1. Earnings timing (0-4 pts)
+  // Yahoo's `earningsTimestamp` is epoch SECONDS; Date.now() returns MILLISECONDS.
+  // Without the *1000 conversion, every ticker computes earningsDaysOut ≈ -20548
+  // (essentially -Date.now()/86_400_000), which silently masks every real
+  // earnings catalyst. The risk_flags evaluator then yellow-flags every fire as
+  // "earnings unverified" instead of red-flagging imminent earnings.
   let earningsDaysOut = null;
   if (d.earningsTimestamp) {
-    earningsDaysOut = Math.round((d.earningsTimestamp - Date.now()) / 86_400_000);
+    // Heuristic: any reasonable earnings epoch in seconds is < 1e11 (year ~5138).
+    // If the caller already provided ms (e.g. tests pre-fix), accept it without re-scaling.
+    const tsMs = d.earningsTimestamp < 1e11 ? d.earningsTimestamp * 1000 : d.earningsTimestamp;
+    earningsDaysOut = Math.round((tsMs - Date.now()) / 86_400_000);
     if (earningsDaysOut >= 30 && earningsDaysOut <= 45) score += 4;
     else if (earningsDaysOut > 0 && earningsDaysOut < 30) score += 2;
   } else {
